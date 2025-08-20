@@ -36,6 +36,10 @@ export class PlatformerLogic implements IGameLogic {
     }
   > = new Map();
 
+  // Lag compensation history (per-player position buffer)
+  private playerHistory: Map<string, { x: number; y: number; timestamp: number }[]> = new Map();
+  private readonly HISTORY_DURATION = 200; // ms
+
   initialize(room: Room<GameRoomState>): void {
     this.room = room;
     // InteractiveObjectManager hiện nhận GameRoom cụ thể, ép kiểu an toàn ở runtime
@@ -48,7 +52,10 @@ export class PlatformerLogic implements IGameLogic {
     this.changeWindDirection();
     this.scheduleNextWindChange();
 
-    this.room.setSimulationInterval((deltaTime) => this.update(deltaTime));
+    this.room.setSimulationInterval(
+      (deltaTime) => this.update(deltaTime),
+      1000 / 24
+    );
   }
 
   update(deltaTime: number): void {
@@ -85,6 +92,8 @@ export class PlatformerLogic implements IGameLogic {
     }
 
     this.room.state.players.delete(client.sessionId);
+    // Cleanup history buffer
+    this.playerHistory.delete(client.sessionId);
   }
 
   handleMessage(client: Client, type: string | number, message: any): void {
@@ -155,6 +164,17 @@ export class PlatformerLogic implements IGameLogic {
     player.y = data.y;
     player.animState = data.animState;
     player.flipX = data.flipX;
+
+    // Record history for lag compensation
+    const now = (this.room as any).clock.currentTime as number;
+    if (!this.playerHistory.has(client.sessionId)) {
+      this.playerHistory.set(client.sessionId, []);
+    }
+    const history = this.playerHistory.get(client.sessionId)!;
+    history.push({ x: player.x, y: player.y, timestamp: now });
+    while (history.length > 0 && now - history[0].timestamp > this.HISTORY_DURATION) {
+      history.shift();
+    }
     if (player.isGrabbing) {
       const grabbedPlayer = this.room.state.players.get(player.isGrabbing);
       if (grabbedPlayer) {
@@ -264,7 +284,31 @@ export class PlatformerLogic implements IGameLogic {
     }
     const target = this.room.state.players.get(message.targetSessionId);
     if (grabber && target && !grabber.isGrabbing && !target.isGrabbed) {
-      const distance = Math.hypot(grabber.x - target.x, grabber.y - target.y);
+      // Estimate action time using half RTT if available
+      const latency: number = (client as any).latency || 50;
+      const actionTime = ((this.room as any).clock.currentTime as number) - latency / 2;
+
+      const targetHistory = this.playerHistory.get(message.targetSessionId);
+      let checkX = target.x;
+      let checkY = target.y;
+
+      if (targetHistory && targetHistory.length > 0) {
+        let p1 = targetHistory[0];
+        let p2 = targetHistory[0];
+        for (let i = targetHistory.length - 1; i >= 0; i--) {
+          if (targetHistory[i].timestamp <= actionTime) {
+            p1 = targetHistory[i];
+            p2 = targetHistory[i + 1] || targetHistory[i];
+            break;
+          }
+        }
+        const denom = p2.timestamp - p1.timestamp || 1;
+        const t = (actionTime - p1.timestamp) / denom;
+        checkX = p1.x + (p2.x - p1.x) * t;
+        checkY = p1.y + (p2.y - p1.y) * t;
+      }
+
+      const distance = Math.hypot(grabber.x - checkX, grabber.y - checkY);
       if (distance <= this.GRAB_DISTANCE_THRESHOLD) {
         grabber.isGrabbing = message.targetSessionId;
         target.isGrabbed = true;
