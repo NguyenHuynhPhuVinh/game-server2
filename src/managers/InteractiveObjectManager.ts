@@ -4,6 +4,8 @@ import {
   InteractiveObjectFactory,
 } from "../objects/IInteractiveObject";
 import { BombObject } from "../objects/BombObject";
+import { InstantSpikeTrapObject } from "../objects/InstantSpikeTrapObject";
+import { GenericPhysicsObject } from "../objects/GenericPhysicsObject";
 
 export class InteractiveObjectManager {
   private room: GameRoom;
@@ -20,6 +22,15 @@ export class InteractiveObjectManager {
 
   private registerObjectTypes(): void {
     this.objectFactory.set("bomb", (id, room) => new BombObject(id, room));
+    this.objectFactory.set(
+      "instant_spike_trap",
+      (id, room) => new InstantSpikeTrapObject(id, room)
+    );
+    // THÊM DÒNG NÀY: Generic physics object thay thế cho rock
+    this.objectFactory.set(
+      "generic_physics_object",
+      (id, room) => new GenericPhysicsObject(id, room)
+    );
   }
 
   private getFromPool(type: string): IInteractiveObject | null {
